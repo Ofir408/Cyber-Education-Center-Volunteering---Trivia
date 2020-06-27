@@ -29,7 +29,8 @@ PROTOCOL_SERVER = {
     "correct_answer": "CORRECT_ANSWER",
     "wrong_answer": "WRONG_ANSWER",
     "all_score": "ALL_SCORE",
-    "logged_answer": "LOGGED_ANSWER"
+    "logged_answer": "LOGGED_ANSWER",
+    "error_msg": "ERROR"
 }  # ..  Add more commands if needed
 
 # Other constants
