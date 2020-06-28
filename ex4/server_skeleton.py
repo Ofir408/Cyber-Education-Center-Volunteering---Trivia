@@ -2,6 +2,7 @@
 # server.py
 ##############################################################################
 import random
+import select
 import socket
 from ex1 import chatlib
 
@@ -11,7 +12,7 @@ from ex1.chatlib import split_msg, PROTOCOL_SERVER, PROTOCOL_CLIENT, join_msg
 users = {}
 questions = {}
 logged_clients = {}  # a dictionary of client sockets to usernames (logged users) - will be used later
-
+messages_to_send = []
 ERROR_MSG = "Error! "
 SERVER_PORT = 5678
 
@@ -19,16 +20,24 @@ SERVER_PORT = 5678
 # HELPER SOCKET METHODS
 
 def build_and_send_message(conn, code, msg):
+    global messages_to_send
     msg_to_send = chatlib.build_message(code, msg)
-    print("server send msg to the client:" + msg_to_send)
-    conn.send(msg_to_send.encode())
+    print("server added msg to queue to send to the client:" + msg_to_send)
+    messages_to_send.append((conn, msg_to_send))
 
 
 def recv_message_and_parse(conn):
     client_response = conn.recv(1024).decode()
+    if client_response == "":
+        return "", ""
     cmd, msg = chatlib.parse_message(client_response)
     print("client response = " + str(chatlib.parse_message(client_response)))
     return cmd, msg
+
+
+def print_client_sockets(client_sockets):
+    for current_client_sock in client_sockets:
+        print('\t {0}'.format(current_client_sock.getpeername()))
 
 
 # Data Loaders #
@@ -89,9 +98,7 @@ def send_error(conn, msg):
 
 def handle_getscore_message(conn, username):
     global users
-    dict_for_user = users[username]
-    score = dict_for_user["score"]
-    build_and_send_message(conn, PROTOCOL_SERVER['score_response_msg'], str(score))
+    build_and_send_message(conn, PROTOCOL_SERVER['score_response_msg'], str(users[username]["score"]))
 
 
 # Implement this in later chapters
@@ -125,11 +132,15 @@ def handle_login_message(conn, msg):
     if users[username]['password'] != password:
         send_error(conn, 'Password is incorrect')
         return
+    if client_hostname in logged_clients:
+        print("This user already connected")
+        build_and_send_message(conn, PROTOCOL_SERVER["login_failed_msg"], 'already connected')
+        return
     logged_clients[client_hostname] = username
     build_and_send_message(conn, PROTOCOL_SERVER['login_ok_msg'], '')
 
 
-def handle_question_message (conn, username):
+def handle_question_message(conn, username):
     random_question = create_random_question(username)
     if random_question is None:
         build_and_send_message(conn, PROTOCOL_SERVER["question_no_questions_msg"], "")
@@ -187,7 +198,7 @@ def handle_client_message(conn, cmd, msg):
     username = logged_clients[(add, port)]
 
     if cmd == PROTOCOL_CLIENT['login_msg']:
-        return # already handled
+        return  # already handled
     if cmd == PROTOCOL_CLIENT["get_question"]:
         handle_question_message(conn, username)
     elif cmd == PROTOCOL_CLIENT["my_score_msg"]:
@@ -210,20 +221,32 @@ def main():
     client_soc = []
     users = load_user_database()
     questions = load_questions()
+
     while True:
-        print("waiting for a new client to connect...")
-        current_client_socket, _ = server_soc.accept()
-        client_soc.append(current_client_socket)
-        should_continue = True
-        while should_continue:
-            cmd, msg = recv_message_and_parse(current_client_socket)
-            if (cmd == "" or cmd == PROTOCOL_CLIENT["logout_msg"]) and msg == "":
-                client_soc.remove(current_client_socket)
-                handle_logout_message(current_client_socket)
-                current_client_socket.close()
-                should_continue = False
+        # similar code to the one how given in the course book.
+        rlist, wlist, xlist = select.select(client_soc + [server_soc], client_soc, [])
+
+        for current_socket in rlist:
+            if current_socket is server_soc:
+                client_socket, client_address = server_soc.accept()
+                client_soc.append(client_socket)
+                print_client_sockets(client_soc)
             else:
-                handle_client_message(current_client_socket, cmd, msg)
+                code, msg = recv_message_and_parse(current_socket)
+                if code != '':
+                    handle_client_message(current_socket, code, msg)
+                else:
+                    if msg == '':
+                        handle_logout_message(current_socket)
+                        client_soc.remove(current_socket)
+                        current_socket.close()
+                        print_client_sockets(client_soc)
+
+        for current_msg in messages_to_send:
+            current_socket, data = current_msg
+            if current_socket in wlist and current_socket in client_soc:
+                current_socket.sendall(data.encode())
+        messages_to_send.clear()
 
 
 if __name__ == '__main__':
